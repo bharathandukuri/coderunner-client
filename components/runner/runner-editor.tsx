@@ -1,5 +1,6 @@
 "use client"
 
+import { useRef, useEffect } from "react"
 import dynamic from "next/dynamic"
 import { useTheme } from "next-themes"
 import { Badge } from "@/components/ui/badge"
@@ -22,6 +23,9 @@ interface RunnerEditorProps {
   code: string
   onChange: (value: string) => void
   onRun: () => void
+  onGetCodeRef?: (getter: () => string) => void
+  compileCmd?: string | null
+  runCmd?: string | null
 }
 
 export function RunnerEditor({
@@ -30,27 +34,57 @@ export function RunnerEditor({
   code,
   onChange,
   onRun,
+  onGetCodeRef,
+  compileCmd,
+  runCmd,
 }: RunnerEditorProps) {
   const { resolvedTheme } = useTheme()
   const monacoTheme = resolvedTheme === "dark" ? "vs-dark" : "light"
 
+  // Always keep a fresh reference to onRun to eliminate stale closure bugs
+  const onRunRef = useRef(onRun)
+  useEffect(() => {
+    onRunRef.current = onRun
+  })
+
+  // Reference to Monaco editor instance
+  const editorRef = useRef<Parameters<OnMount>[0] | null>(null)
+
+  useEffect(() => {
+    if (onGetCodeRef) {
+      onGetCodeRef(() => editorRef.current?.getValue() || code)
+    }
+  }, [onGetCodeRef, code])
+
   const handleEditorDidMount: OnMount = (editor, monaco) => {
+    editorRef.current = editor
     registerCustomCompletions(monaco)
 
-    // Ctrl+Enter / Cmd+Enter execution shortcut
+    if (onGetCodeRef) {
+      onGetCodeRef(() => editor.getValue())
+    }
+
+    // Ctrl+Enter / Cmd+Enter execution shortcut using fresh ref
     editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter, () => {
-      onRun()
+      onRunRef.current()
     })
 
     editor.focus()
   }
+
+  const commandInfo = [
+    runCmd ? `Run: ${runCmd}` : null,
+    compileCmd ? `Compile: ${compileCmd}` : null,
+  ]
+    .filter(Boolean)
+    .join(" | ")
 
   return (
     <section
       aria-label="Code Editor"
       className="flex h-full min-h-0 w-full min-w-0 flex-col overflow-hidden"
     >
-      {/* Editor Tab Bar - Clean and without "autocomplete" word */}
+      {/* Editor Tab Bar */}
       <div className="flex h-10 shrink-0 items-center justify-between border-b border-border/50 bg-muted/30 px-4">
         <Badge
           variant="secondary"
@@ -62,7 +96,8 @@ export function RunnerEditor({
 
         <Badge
           variant="outline"
-          className="font-mono text-[10px] text-muted-foreground uppercase"
+          title={commandInfo || undefined}
+          className="cursor-help font-mono text-[10px] text-muted-foreground uppercase"
         >
           {language}
         </Badge>

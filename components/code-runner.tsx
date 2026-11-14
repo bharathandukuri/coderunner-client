@@ -1,8 +1,13 @@
 "use client"
 
-import { useState, useTransition } from "react"
+import { useState, useTransition, useEffect, useRef, useCallback } from "react"
 import { executeCode } from "@/app/actions/submissions"
-import type { Language, SubmissionResult } from "@/types/coderunner"
+import { getLanguageById } from "@/app/actions/languages"
+import type {
+  Language,
+  LanguageDetail,
+  SubmissionResult,
+} from "@/types/coderunner"
 import { LANGUAGE_TEMPLATES } from "@/lib/templates"
 import {
   getMonacoLanguage,
@@ -26,7 +31,7 @@ interface CodeRunnerProps {
 }
 
 export default function CodeRunner({ initialLanguages }: CodeRunnerProps) {
-  const [languages] = useState<Language[]>(initialLanguages)
+  const languages = initialLanguages
   const defaultLanguage = initialLanguages[0] || {
     id: 5,
     name: "Python (3.8.10)",
@@ -35,37 +40,96 @@ export default function CodeRunner({ initialLanguages }: CodeRunnerProps) {
   const [selectedLanguageId, setSelectedLanguageId] = useState<number>(
     defaultLanguage.id
   )
-  const [sourceCode, setSourceCode] = useState<string>(
-    LANGUAGE_TEMPLATES[defaultLanguage.id] || ""
-  )
+
+  // Maintain separate code per language so user work is preserved when switching
+  const [codeMap, setCodeMap] = useState<Record<number, string>>(() => ({
+    ...LANGUAGE_TEMPLATES,
+    [defaultLanguage.id]: LANGUAGE_TEMPLATES[defaultLanguage.id] || "",
+  }))
+
+  // Language details cache fetched from the backend API (source_file, compile_cmd, run_cmd)
+  const [languageDetails, setLanguageDetails] = useState<
+    Record<number, LanguageDetail>
+  >({})
+
   const [stdin, setStdin] = useState<string>("")
   const [activeTab, setActiveTab] = useState<ConsoleTab>("output")
   const [isPending, startTransition] = useTransition()
   const [result, setResult] = useState<SubmissionResult | null>(null)
   const [error, setError] = useState<string | null>(null)
 
+  // Direct ref getter to access live Monaco code upon execution
+  const getEditorCodeRef = useRef<() => string>(() => "")
+
+  // Current code for the selected language
+  const currentCode =
+    codeMap[selectedLanguageId] ??
+    (LANGUAGE_TEMPLATES[selectedLanguageId] || "")
+
+  // Sync with API: fetch authoritative language metadata when selected language changes
+  useEffect(() => {
+    if (!selectedLanguageId) return
+
+    if (languageDetails[selectedLanguageId]) return
+
+    let isMounted = true
+    getLanguageById(selectedLanguageId).then((res) => {
+      if (isMounted && res.success && res.data) {
+        setLanguageDetails((prev) => ({
+          ...prev,
+          [selectedLanguageId]: res.data,
+        }))
+      }
+    })
+
+    return () => {
+      isMounted = false
+    }
+  }, [selectedLanguageId, languageDetails])
+
   const handleLanguageChange = (newId: number) => {
+    // 1. Save live code of the current language before switching
+    const latestCode = getEditorCodeRef.current() || currentCode
+    setCodeMap((prev) => ({
+      ...prev,
+      [selectedLanguageId]: latestCode,
+      [newId]: prev[newId] ?? (LANGUAGE_TEMPLATES[newId] || ""),
+    }))
+
+    // 2. Switch to new language
     setSelectedLanguageId(newId)
-    setSourceCode(LANGUAGE_TEMPLATES[newId] || "")
     setResult(null)
     setError(null)
+  }
+
+  const handleCodeChange = (newCode: string) => {
+    setCodeMap((prev) => ({
+      ...prev,
+      [selectedLanguageId]: newCode,
+    }))
   }
 
   const handleResetCode = () => {
-    setSourceCode(LANGUAGE_TEMPLATES[selectedLanguageId] || "")
+    const template = LANGUAGE_TEMPLATES[selectedLanguageId] || ""
+    setCodeMap((prev) => ({
+      ...prev,
+      [selectedLanguageId]: template,
+    }))
     setResult(null)
     setError(null)
   }
 
-  const handleRun = () => {
-    if (isPending || !sourceCode.trim()) return
+  const handleRun = useCallback(() => {
+    const liveCode = getEditorCodeRef.current() || currentCode
+    if (isPending || !liveCode.trim()) return
+
     setError(null)
     setActiveTab("output")
 
     startTransition(async () => {
       const res = await executeCode({
         language_id: selectedLanguageId,
-        source_code: sourceCode,
+        source_code: liveCode,
         stdin,
       })
 
@@ -75,14 +139,17 @@ export default function CodeRunner({ initialLanguages }: CodeRunnerProps) {
         setError(res.error)
       }
     })
-  }
+  }, [selectedLanguageId, currentCode, stdin, isPending])
 
   const handleClearConsole = () => {
     setResult(null)
     setError(null)
   }
 
-  const currentFileName = getLanguageFileName(selectedLanguageId)
+  // Get active language details from API
+  const activeDetail = languageDetails[selectedLanguageId]
+  const currentFileName =
+    activeDetail?.source_file || getLanguageFileName(selectedLanguageId)
   const monacoLanguage = getMonacoLanguage(selectedLanguageId)
 
   return (
@@ -94,7 +161,7 @@ export default function CodeRunner({ initialLanguages }: CodeRunnerProps) {
         onResetCode={handleResetCode}
         onRun={handleRun}
         isPending={isPending}
-        isRunDisabled={!sourceCode.trim()}
+        isRunDisabled={!currentCode.trim()}
       />
 
       <main className="flex min-h-0 w-full flex-1 overflow-hidden">
@@ -103,9 +170,14 @@ export default function CodeRunner({ initialLanguages }: CodeRunnerProps) {
             <RunnerEditor
               fileName={currentFileName}
               language={monacoLanguage}
-              code={sourceCode}
-              onChange={setSourceCode}
+              code={currentCode}
+              onChange={handleCodeChange}
               onRun={handleRun}
+              onGetCodeRef={(getter) => {
+                getEditorCodeRef.current = getter
+              }}
+              compileCmd={activeDetail?.compile_cmd}
+              runCmd={activeDetail?.run_cmd}
             />
           </ResizablePanel>
 

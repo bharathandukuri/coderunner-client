@@ -33,11 +33,7 @@ export function RunnerHeader({
   isRunDisabled,
 }: RunnerHeaderProps) {
   const { resolvedTheme, setTheme } = useTheme()
-
-  const selectItems = languages.map((lang) => ({
-    value: lang.id.toString(),
-    label: lang.name,
-  }))
+  const currentLanguage = languages.find((l) => l.id === selectedLanguageId)
 
   return (
     <header className="z-10 flex h-14 shrink-0 items-center justify-between border-b border-border bg-card/60 px-4 backdrop-blur-md">
@@ -54,7 +50,6 @@ export function RunnerHeader({
 
         <div className="flex items-center gap-2">
           <Select
-            items={selectItems}
             value={selectedLanguageId.toString()}
             onValueChange={(val) => {
               if (val) onLanguageChange(Number(val))
@@ -62,10 +57,7 @@ export function RunnerHeader({
           >
             <SelectTrigger className="h-8 w-52 text-xs font-medium">
               <SelectValue placeholder="Select Language">
-                {(val) =>
-                  languages.find((l) => l.id.toString() === val)?.name ||
-                  "Select Language"
-                }
+                {currentLanguage?.name || "Select Language"}
               </SelectValue>
             </SelectTrigger>
             <SelectContent>
